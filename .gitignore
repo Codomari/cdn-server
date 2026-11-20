@@ -1,0 +1,9 @@
+/target/
+/bin/
+/staging/
+/config.yaml
+/storage/
+/.dragonfly/
+/certbot/
+/certs/
+/config.local.yaml

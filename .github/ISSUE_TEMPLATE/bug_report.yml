@@ -1,0 +1,34 @@
+name: Bug report
+description: Report a reproducible problem with CDN server.
+title: '[Bug] '
+body:
+  - type: markdown
+    attributes:
+      value: Report suspected vulnerabilities [privately by email](mailto:anar.k.jafarov@gmail.com). Redact credentials, private keys, and sensitive URLs from public reports.
+  - type: input
+    id: version
+    attributes:
+      label: Version and environment
+      description: Include the CDN server version, OS, and Redis or DragonflyDB version.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Include the request, relevant configuration, and steps needed to reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the HTTP status, response headers, or relevant service log excerpts.
+    validations:
+      required: true

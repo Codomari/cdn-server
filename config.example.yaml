@@ -1,0 +1,68 @@
+http:
+  enabled: true
+  bind: 0.0.0.0
+  port: 80
+
+https:
+  enabled: false
+  bind: 0.0.0.0
+  port: 443
+  tls:
+    hosts:
+      - name: cdn.example.com
+        provider: certbot
+        account: ops@example.com
+      - name: cdn-files.example.com
+        provider: file
+        key: certs/cdn-files.example.com.key
+        cert: certs/cdn-files.example.com.cert
+    stateDir: certbot/
+    staging: false
+
+freshness: 24h
+stale_retention: 7d
+storage: /etc/cdn-server/storage
+maxFilesize: 8MiB
+allowedExtensions:
+  - jpg
+  - jpeg
+  - png
+  - apng
+  - gif
+  - webp
+  - avif
+  - svg
+  - ico
+  - bmp
+  - tif
+  - tiff
+  - heic
+  - heif
+  - css
+  - js
+  - mjs
+  - json
+deniedExtensions:
+  - .env
+  - php
+  - java
+  - jar
+  - zip
+  - rar
+  - 7z
+  - tar
+  - tar.gz
+  - gz
+  - gzip
+  - conf
+  - yaml
+  - ini
+  - inc
+allowedHosts:
+  - media.example.com
+  - '*.assets.example.net'
+  - 'static.*.example.org'
+# Optional for DNS hosts. Required for origins specified as literal IP addresses.
+hostIPWhitelist: []
+hostIPCacheTtl: 1d
+storeRedirects: false
