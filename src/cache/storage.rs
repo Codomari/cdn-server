@@ -6,44 +6,17 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, OpenOptions, ReadDir},
     io::{AsyncReadExt, AsyncWriteExt},
 };
 use ulid::Ulid;
 
+use super::metadata::{METADATA_LIMIT, Metadata};
+
 const DATA: &str = "data.bin";
 const METADATA: &str = "metadata.json";
 const STAGING_PREFIX: &str = ".stage-";
-pub(crate) const METADATA_LIMIT: usize = 32 * 1024;
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Deadlines {
-    pub(crate) expires_at: u64,
-    pub(crate) hard_delete_at: u64,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct StoredRedirect {
-    pub(crate) status: u16,
-    pub(crate) location: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct Metadata {
-    pub(crate) cache_key: String,
-    pub(crate) original_name: String,
-    pub(crate) content_type: String,
-    pub(crate) version: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) redirect: Option<StoredRedirect>,
-    #[serde(flatten)]
-    pub(crate) deadlines: Deadlines,
-}
-
 #[derive(Clone)]
 pub(crate) struct Storage {
     root: Arc<Path>,
@@ -57,7 +30,7 @@ impl Storage {
         Ok(Self { root: root.into() })
     }
 
-    pub(crate) async fn write(
+    pub(super) async fn write(
         &self,
         id: &str,
         bytes: &[u8],
@@ -94,7 +67,7 @@ impl Storage {
         Ok((directory, json))
     }
 
-    pub(crate) async fn open_read(&self, id: &str) -> io::Result<Option<LockedDirectory>> {
+    pub(super) async fn open_read(&self, id: &str) -> io::Result<Option<LockedDirectory>> {
         let path = self.path(id)?;
         for shard in [
             self.root.join(&id[..2]),
@@ -131,7 +104,7 @@ impl Storage {
         Ok(self.root.join(&id[..2]).join(&id[2..4]).join(&id[4..]))
     }
 
-    pub(crate) async fn sweep_page(&self, cursor: &mut Sweep, budget: usize) -> Vec<SweepEntry> {
+    pub(super) async fn sweep_page(&self, cursor: &mut Sweep, budget: usize) -> Vec<SweepEntry> {
         let mut leaves = Vec::new();
         if cursor.stack.is_empty() {
             let Ok(entries) = fs::read_dir(&self.root).await else {
@@ -186,24 +159,24 @@ impl Storage {
 }
 
 #[derive(Default)]
-pub(crate) struct Sweep {
+pub(super) struct Sweep {
     stack: Vec<ReadDir>,
 }
 
 impl Sweep {
-    pub(crate) fn in_progress(&self) -> bool {
+    pub(super) fn in_progress(&self) -> bool {
         !self.stack.is_empty()
     }
 }
 
-pub(crate) struct SweepEntry {
-    pub(crate) id: String,
+pub(super) struct SweepEntry {
+    pub(super) id: String,
     path: PathBuf,
-    pub(crate) staging: bool,
+    pub(super) staging: bool,
 }
 
 impl SweepEntry {
-    pub(crate) async fn lock(self) -> io::Result<Option<LockedDirectory>> {
+    pub(super) async fn lock(self) -> io::Result<Option<LockedDirectory>> {
         match LockedDirectory::open(self.path, false).await {
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(None),
             result => result,
@@ -212,7 +185,7 @@ impl SweepEntry {
 }
 
 // The lock follows the directory inode across rename and remains held through Redis publication.
-pub(crate) struct LockedDirectory {
+pub(super) struct LockedDirectory {
     path: PathBuf,
     file: File,
 }
@@ -236,25 +209,25 @@ impl LockedDirectory {
         }
     }
 
-    pub(crate) async fn metadata_json(&self) -> io::Result<Option<Vec<u8>>> {
+    pub(super) async fn metadata_json(&self) -> io::Result<Option<Vec<u8>>> {
         match read_file(&self.path.join(METADATA), METADATA_LIMIT).await? {
             Contents::Data(json) => Ok(Some(json)),
             Contents::Missing | Contents::TooLarge => Ok(None),
         }
     }
 
-    pub(crate) async fn read(&self, limit: usize) -> io::Result<Contents> {
+    pub(super) async fn read(&self, limit: usize) -> io::Result<Contents> {
         read_file(&self.path.join(DATA), limit).await
     }
 
-    pub(crate) fn older_than(&self, age: Duration) -> io::Result<bool> {
+    pub(super) fn older_than(&self, age: Duration) -> io::Result<bool> {
         let modified = self.file.metadata()?.modified()?;
         Ok(SystemTime::now()
             .duration_since(modified)
             .is_ok_and(|elapsed| elapsed >= age))
     }
 
-    pub(crate) async fn remove(self) -> io::Result<()> {
+    pub(super) async fn remove(self) -> io::Result<()> {
         for name in [DATA, METADATA] {
             match fs::remove_file(self.path.join(name)).await {
                 Ok(()) => {}
@@ -273,7 +246,7 @@ impl LockedDirectory {
     }
 }
 
-pub(crate) enum Contents {
+pub(super) enum Contents {
     Missing,
     TooLarge,
     Data(Vec<u8>),
@@ -340,13 +313,14 @@ fn invalid_name() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "invalid storage ULID")
 }
 
-pub(crate) fn valid_ulid(id: &str) -> bool {
+pub(super) fn valid_ulid(id: &str) -> bool {
     id.len() == 26 && Ulid::from_string(id).is_ok_and(|ulid| ulid.to_string() == id)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cache::metadata::Deadlines;
 
     #[tokio::test]
     async fn published_pair_is_locked_and_cleanup_preserves_unrelated_files() {

@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "cdn-server"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "axum",
  "axum-server",
@@ -155,6 +155,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tokio",
+ "tokio-util",
  "ulid",
  "url",
 ]

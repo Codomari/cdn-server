@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0
+
+- Grouped the Rust source by responsibility and made `main.rs` construct and inject the application's dependencies.
+- Added graceful shutdown on SIGINT and SIGTERM. Listeners drain in-flight requests, cache workers stop taking new work, and any running Certbot process is stopped. Shutdown has a 30-second deadline.
+
 ## 0.2.1
 
 - Added `/download/<host>/<path>` for `application/octet-stream` attachments with the final file's original filename. The route follows at most one permitted redirect and omits client cache headers.

@@ -1,17 +1,16 @@
 use std::collections::HashSet;
 
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::HeaderValue;
 use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use url::Url;
 
-use crate::HttpError;
+use crate::error::RequestError;
 
 pub(crate) const URL_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
     .remove(b'.')
     .remove(b'_')
     .remove(b'~');
-const INVALID_FILENAME: HttpError = (StatusCode::BAD_REQUEST, "invalid filename");
 
 pub(crate) struct FilePolicy {
     allowed: HashSet<String>,
@@ -32,17 +31,17 @@ impl FilePolicy {
         })
     }
 
-    pub(crate) fn filename(&self, url: &Url) -> Result<FileName, HttpError> {
+    pub(crate) fn filename(&self, url: &Url) -> Result<FileName, RequestError> {
         let path = url.path();
         let last = path.rsplit('/').next().unwrap_or_default();
         let decoded = percent_decode_str(last)
             .decode_utf8()
-            .map_err(|_| INVALID_FILENAME)?;
+            .map_err(|_| RequestError::InvalidFilename)?;
         if decoded.len() > 255
             || decoded.contains(['/', '\\'])
             || decoded.chars().any(char::is_control)
         {
-            return Err(INVALID_FILENAME);
+            return Err(RequestError::InvalidFilename);
         }
         let original = if decoded.is_empty() {
             "download".to_owned()
@@ -64,7 +63,7 @@ impl FilePolicy {
                     .any(|(dot, _)| rules.contains(&lowercase[dot + 1..]))
         };
         if matches(&self.denied) || (!self.allowed.is_empty() && !matches(&self.allowed)) {
-            return Err((StatusCode::FORBIDDEN, "file extension is not permitted"));
+            return Err(RequestError::ExtensionDenied);
         }
         Ok(FileName {
             original,
@@ -129,8 +128,8 @@ mod tests {
         let policy = FilePolicy::new(vec!["gz".into()], vec![".tar.gz".into()]).unwrap();
         let archive = Url::parse("https://example.com/archive.TAR%2EGZ").unwrap();
         assert_eq!(
-            policy.filename(&archive).err().unwrap().0,
-            StatusCode::FORBIDDEN
+            policy.filename(&archive).err().unwrap(),
+            RequestError::ExtensionDenied
         );
         let compressed = Url::parse("https://example.com/log.gz").unwrap();
         assert!(policy.filename(&compressed).is_ok());
@@ -150,8 +149,8 @@ mod tests {
         );
         let png = Url::parse("https://example.com/example.PNG").unwrap();
         assert_eq!(
-            policy.filename(&png).err().unwrap().0,
-            StatusCode::FORBIDDEN
+            policy.filename(&png).err().unwrap(),
+            RequestError::ExtensionDenied
         );
         assert!(
             attachment(&file.original)
