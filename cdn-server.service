@@ -8,6 +8,7 @@ ConditionPathExists=/etc/cdn-server/config.yaml
 [Service]
 User=cdn
 Group=cdn
+LimitNOFILE=100000
 WorkingDirectory=/etc/cdn-server
 Environment=CONFIG_PATH=/etc/cdn-server/config.yaml
 ExecStart=/etc/cdn-server/bin/cdn-server
