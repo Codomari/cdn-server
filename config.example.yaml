@@ -19,6 +19,14 @@ https:
     stateDir: certbot/
     staging: false
 
+cors:
+  enable: true
+  allow:
+    origin: true
+    methods: true
+    headers: true
+    exposeHeaders: true
+
 freshness: 24h
 stale_retention: 7d
 storage: /etc/cdn-server/storage

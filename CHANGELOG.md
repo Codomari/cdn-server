@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0
+
+- Enable permissive CORS by default for browser requests without credentials. The CDN routes answer OPTIONS preflights, allow any origin and request headers, and expose response headers such as `ETag` and `Content-Disposition`.
+- Add boolean configuration switches for CORS and each of its response headers. Set `cors.enable` to `false` to disable CORS entirely.
+
 ## 0.3.1
 
 - Allow DNS hostnames outside `allowedHosts` when they resolve to a public address in `hostIPWhitelist`. Cache the approved address for `hostIPCacheTtl` and check it against the current policy on each request.

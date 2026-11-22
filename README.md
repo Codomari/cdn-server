@@ -1,4 +1,4 @@
-# CDN server 0.3.1
+# CDN server 0.4.0
 
 This Rust service stores remote file bytes and metadata on disk. A Redis-compatible database such as DragonflyDB maps each cached URL path to its current ULID and keeps a copy of the generation's metadata for cache hits.
 

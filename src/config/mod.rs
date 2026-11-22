@@ -19,6 +19,7 @@ pub(crate) use listeners::{Listeners, TlsHost};
 struct Config {
     http: HttpConfig,
     https: HttpsConfig,
+    cors: CorsConfig,
     freshness: String,
     stale_retention: String,
     #[serde(rename = "allowedHosts")]
@@ -50,6 +51,7 @@ impl Default for Config {
         Self {
             http: HttpConfig::default(),
             https: HttpsConfig::default(),
+            cors: CorsConfig::default(),
             freshness: "24h".into(),
             stale_retention: "7d".into(),
             allowed_hosts: Vec::new(),
@@ -64,6 +66,42 @@ impl Default for Config {
     }
 }
 
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct CorsConfig {
+    pub(crate) enable: bool,
+    pub(crate) allow: CorsAllow,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            enable: true,
+            allow: CorsAllow::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize)]
+#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
+pub(crate) struct CorsAllow {
+    pub(crate) origin: bool,
+    pub(crate) methods: bool,
+    pub(crate) headers: bool,
+    pub(crate) expose_headers: bool,
+}
+
+impl Default for CorsAllow {
+    fn default() -> Self {
+        Self {
+            origin: true,
+            methods: true,
+            headers: true,
+            expose_headers: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct CacheConfig {
     pub(crate) freshness: u64,
@@ -74,6 +112,7 @@ pub(crate) struct CacheConfig {
 
 pub(crate) struct Settings {
     pub(crate) listeners: Listeners,
+    pub(crate) cors: CorsConfig,
     pub(crate) cache: CacheConfig,
     pub(crate) origins: OriginPolicy,
     pub(crate) storage: PathBuf,
@@ -113,6 +152,7 @@ pub(crate) fn load() -> Result<Settings, Box<dyn Error>> {
     let storage = std::mem::take(&mut config.storage);
     Ok(Settings {
         listeners: Listeners::from_config(&config.http, &mut config.https)?,
+        cors: config.cors,
         cache: CacheConfig::try_from(config)?,
         origins,
         storage,
@@ -179,6 +219,27 @@ impl TryFrom<Config> for CacheConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cors_defaults_to_permissive_and_uses_boolean_fields() {
+        for yaml in ["{}", "cors: {}", include_str!("../../config.example.yaml")] {
+            let config: Config = serde_yaml::from_str(yaml).unwrap();
+            assert!(config.cors.enable);
+            assert!(config.cors.allow.origin);
+            assert!(config.cors.allow.methods);
+            assert!(config.cors.allow.headers);
+            assert!(config.cors.allow.expose_headers);
+        }
+
+        let partial: Config = serde_yaml::from_str("cors: { allow: { origin: false } }").unwrap();
+        assert!(partial.cors.enable);
+        assert!(!partial.cors.allow.origin);
+        assert!(partial.cors.allow.methods);
+        assert!(partial.cors.allow.headers);
+        assert!(partial.cors.allow.expose_headers);
+        assert!(serde_yaml::from_str::<Config>("cors: { allow: { origin: '*' } }").is_err());
+        assert!(serde_yaml::from_str::<Config>("cors: { allow: { method: true } }").is_err());
+    }
 
     #[test]
     fn host_patterns_default_to_empty_and_use_yaml_array() {

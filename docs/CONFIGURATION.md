@@ -31,6 +31,18 @@ Relative certificate and state paths resolve from the working directory, which i
 
 For each Certbot hostname, public DNS must lead to a server that routes public TCP port 80 to the app's HTTP listener. The app serves `/.well-known/acme-challenge/<token>` and invokes Certbot in webroot mode as the service user. It loads available certificates at startup, checks for renewal every 12 hours after a successful check, and reloads Certbot certificates in process. TLS handshakes for a host need a loaded certificate. Restart the service after changing file-based certificates.
 
+## CORS
+
+CORS is enabled by default for browser requests without credentials to `/api/v1/fetch`, `/serve`, and `/download`. Set `cors.enable` to `false` to disable it, or set individual fields under `cors.allow` to `false` to omit their headers.
+
+| Field | Default | Behavior |
+| --- | --- | --- |
+| `cors.enable` | `true` | Applies the configured CORS headers and answers OPTIONS on CDN routes when at least one switch is enabled. |
+| `cors.allow.origin` | `true` | Adds `Access-Control-Allow-Origin: *` to responses, including preflights. |
+| `cors.allow.methods` | `true` | Adds `Access-Control-Allow-Methods: *` to preflights. CDN endpoints continue to serve GET and HEAD requests. |
+| `cors.allow.headers` | `true` | Adds `Access-Control-Allow-Headers: *,authorization` to preflights. Browsers require `Authorization` to be listed explicitly. |
+| `cors.allow.exposeHeaders` | `true` | Adds `Access-Control-Expose-Headers: *` to ordinary responses so browser code can read headers such as `ETag` and `Content-Disposition`. |
+
 ## Origins and redirects
 
 | Field | Default | Behavior |

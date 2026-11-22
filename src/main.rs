@@ -30,7 +30,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         storage,
         settings.files,
     );
-    let router = http::router(cache);
+    let router = http::router(cache, settings.cors);
     let app = app::Application::new(settings.listeners, router, workers);
     app.run(shutdown).await
 }
