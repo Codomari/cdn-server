@@ -33,7 +33,7 @@ The installer ensures the `cdn` system user and group exist. The unit runs as `c
 
 ## Configure and start
 
-Edit `/etc/cdn-server/config.yaml` using the [configuration reference](CONFIGURATION.md). Set both origin allowlists before serving traffic. For file-based TLS, supply the PEM files separately and give `cdn` read access, for example with a private key owned by `root:cdn` and mode `0640`. Relative certificate paths such as `certs/site.key` resolve under `/etc/cdn-server`.
+Edit `/etc/cdn-server/config.yaml` using the [configuration reference](CONFIGURATION.md). Configure the permitted origin hostnames and any public IP addresses you want to allow before serving traffic. For file-based TLS, supply the PEM files separately and give `cdn` read access, for example with a private key owned by `root:cdn` and mode `0640`. Relative certificate paths such as `certs/site.key` resolve under `/etc/cdn-server`.
 
 Start the configured service, or use `restart` if it is already running and you have changed its configuration or executable.
 

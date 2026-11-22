@@ -35,12 +35,12 @@ For each Certbot hostname, public DNS must lead to a server that routes public T
 
 | Field | Default | Behavior |
 | --- | --- | --- |
-| `allowedHosts` | `[]` in code | Exact hostnames and wildcard patterns. Matching ignores case, and `*` matches within a DNS label. For example, `'static.*.example.org'` matches `static.media.example.org`. An empty list blocks all origins. Quote patterns in YAML. |
-| `hostIPWhitelist` | `[]` | Exact public IPv4 and IPv6 addresses. For allowed DNS hostnames these addresses are preferred on a fresh lookup. Literal IP origins must match this list and `allowedHosts`. |
-| `hostIPCacheTtl` | `1d` | Positive whole-second lifetime for the DNS result stored at `host:<hostname>:ip` in Redis. Examples include `30m`, `12h`, and `1d`. |
+| `allowedHosts` | `[]` in code | Exact hostnames and wildcard patterns. Matching ignores case, and `*` matches within a DNS label. For example, `'static.*.example.org'` matches `static.media.example.org`. Matching DNS hostnames can use any public address they resolve to. Quote patterns in YAML. |
+| `hostIPWhitelist` | `[]` | Exact public IPv4 and IPv6 addresses. DNS hostnames outside `allowedHosts` require an address from this list. Fresh lookups also prefer these addresses for hostnames in `allowedHosts`. Literal IP origins must match both lists. |
+| `hostIPCacheTtl` | `1d` | Positive whole-second lifetime for the approved address stored at `host:<hostname>:ip` in Redis. Examples include `30m`, `12h`, and `1d`. |
 | `storeRedirects` | `false` | When enabled, caches eligible upstream redirects and returns their status and `Location` from `/serve`. |
 
-A hostname that fails `allowedHosts` gets HTTP `403`. An allowed DNS hostname may use any public IP it resolves to. A lookup with no usable public address or an invalid cached IP gets HTTP `444`. On a Redis hit, the app validates the cached address and reuses it until the cache entry expires. Downloads connect to that address while preserving the original hostname for TLS verification.
+If both lists are empty, all origins are blocked. A hostname outside `allowedHosts` gets HTTP `403` when its public address fails the IP whitelist check. A lookup with no public address or an invalid cached IP gets HTTP `444`. On a Redis hit, the app checks the cached address against the current rules and reuses it if permitted. Fresh lookups cache the approved address only. Downloads connect to that address while preserving the original hostname for TLS verification.
 
 Upstream redirects with status 301, 302, 303, 307, or 308 return HTTP `444` when `storeRedirects` is disabled. When enabled, the destination must pass the same origin rules and URL validation as a direct request. An invalid or disallowed target also returns `444`. HTTPS-to-HTTP downgrades are rejected. The app resolves relative destinations against the origin and stores the absolute destination. `/serve` returns the redirect to the client. `/download` follows one permitted redirect and sends the final file as an attachment. A second redirect returns `444`.
 

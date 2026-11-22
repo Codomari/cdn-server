@@ -20,20 +20,20 @@ impl AllowedHosts {
         Ok(Self(patterns))
     }
 
-    pub(crate) fn allows(&self, host: &str) -> bool {
+    pub(super) fn matches(&self, host: &str) -> Option<bool> {
         let host = host.strip_suffix('.').unwrap_or(host);
         let labels: Vec<_> = host.split('.').collect();
         if host.len() > 253 || labels.iter().any(|label| !valid_label(label, false)) {
-            return false;
+            return None;
         }
 
-        self.0.iter().any(|pattern| {
+        Some(self.0.iter().any(|pattern| {
             pattern.len() == labels.len()
                 && pattern
                     .iter()
                     .zip(&labels)
                     .all(|(pattern, label)| matches_label(pattern, &label.to_ascii_lowercase()))
-        })
+        }))
     }
 }
 
@@ -91,19 +91,19 @@ mod tests {
             "cdn-edge.net",
             "cdn1-edge2.net",
         ] {
-            assert!(allowed.allows(host), "{host}");
+            assert_eq!(allowed.matches(host), Some(true), "{host}");
         }
         for host in [
             "something.com.example",
             "sub.something.com",
             "nested.example.az",
             "az",
-            "static..click",
             "static.assets.click.example",
             "notcdn1-edge2.net",
         ] {
-            assert!(!allowed.allows(host), "{host}");
+            assert_eq!(allowed.matches(host), Some(false), "{host}");
         }
+        assert_eq!(allowed.matches("static..click"), None);
     }
 
     #[test]
@@ -114,6 +114,9 @@ mod tests {
                 "{pattern}"
             );
         }
-        assert!(!AllowedHosts::new(vec![]).unwrap().allows("example.com"));
+        assert_eq!(
+            AllowedHosts::new(vec![]).unwrap().matches("example.com"),
+            Some(false)
+        );
     }
 }

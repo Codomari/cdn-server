@@ -62,7 +62,7 @@ allowedHosts:
   - media.example.com
   - '*.assets.example.net'
   - 'static.*.example.org'
-# Optional for DNS hosts. Required for origins specified as literal IP addresses.
+# Allows additional DNS hosts by public IP. Literal IP origins require both lists.
 hostIPWhitelist: []
 hostIPCacheTtl: 1d
 storeRedirects: false

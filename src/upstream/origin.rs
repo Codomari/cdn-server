@@ -7,17 +7,6 @@ use crate::error::RequestError;
 
 use super::{AllowedHosts, CONNECT_TIMEOUT};
 
-fn check_host(url: &Url, allowed_hosts: &AllowedHosts) -> Result<(), RequestError> {
-    if url
-        .host_str()
-        .is_some_and(|host| allowed_hosts.allows(host))
-    {
-        Ok(())
-    } else {
-        Err(RequestError::HostDenied)
-    }
-}
-
 fn literal_ip(url: &Url) -> Option<IpAddr> {
     match url.host()? {
         Host::Ipv4(ip) => Some(ip.into()),
@@ -33,8 +22,35 @@ pub(crate) struct OriginPolicy {
 }
 
 impl OriginPolicy {
-    fn permits(&self, ip: IpAddr, literal: Option<IpAddr>) -> bool {
-        is_public(ip) && literal.is_none_or(|value| value == ip && self.whitelist.contains(&ip))
+    fn check_ip(
+        &self,
+        ip: IpAddr,
+        literal: Option<IpAddr>,
+        host_allowed: bool,
+    ) -> Result<IpAddr, RequestError> {
+        if !is_public(ip) || literal.is_some_and(|literal| literal != ip) {
+            return Err(RequestError::IpDenied);
+        }
+        if (literal.is_some() || !host_allowed) && !self.whitelist.contains(&ip) {
+            return Err(if host_allowed {
+                RequestError::IpDenied
+            } else {
+                RequestError::HostDenied
+            });
+        }
+        Ok(ip)
+    }
+
+    fn select_dns_ip(
+        &self,
+        addresses: impl Iterator<Item = IpAddr>,
+        host_allowed: bool,
+    ) -> Result<IpAddr, RequestError> {
+        let ip = addresses
+            .filter(|ip| is_public(*ip))
+            .min_by_key(|ip| (!self.whitelist.contains(ip), *ip))
+            .ok_or(RequestError::IpDenied)?;
+        self.check_ip(ip, None, host_allowed)
     }
 
     pub(crate) async fn approve(
@@ -42,11 +58,17 @@ impl OriginPolicy {
         redis: &MultiplexedConnection,
         url: &Url,
     ) -> Result<IpAddr, RequestError> {
-        check_host(url, &self.allowed_hosts)?;
         let host = url.host_str().ok_or(RequestError::InvalidUrl)?;
+        let host_allowed = self
+            .allowed_hosts
+            .matches(host)
+            .ok_or(RequestError::HostDenied)?;
+        let literal = literal_ip(url);
+        if !host_allowed && (literal.is_some() || self.whitelist.is_empty()) {
+            return Err(RequestError::HostDenied);
+        }
         let hostname = host.trim_end_matches('.').to_ascii_lowercase();
         let key = format!("host:{hostname}:ip");
-        let literal = literal_ip(url);
         let mut connection = redis.clone();
         let mut resolved = None;
 
@@ -66,12 +88,14 @@ impl OriginPolicy {
                 let ip = std::str::from_utf8(&bytes)
                     .ok()
                     .and_then(|value| value.parse::<IpAddr>().ok())
-                    .filter(|ip| ip.to_string().as_bytes() == bytes && self.permits(*ip, literal));
-                return ip.ok_or(RequestError::IpDenied);
+                    .filter(|ip| ip.to_string().as_bytes() == bytes)
+                    .ok_or(RequestError::IpDenied)?;
+                return self.check_ip(ip, literal, host_allowed);
             }
 
             let ip = match (resolved, literal) {
-                (Some(ip), _) | (_, Some(ip)) => ip,
+                (Some(ip), _) => ip,
+                (None, Some(ip)) => self.check_ip(ip, literal, host_allowed)?,
                 (None, None) => {
                     let absolute = format!("{hostname}.");
                     let addresses = tokio::time::timeout(
@@ -81,16 +105,7 @@ impl OriginPolicy {
                     .await
                     .map_err(|_| RequestError::IpDenied)?
                     .map_err(|_| RequestError::IpDenied)?;
-                    addresses
-                        .map(|address| address.ip())
-                        .min_by_key(|ip| {
-                            (
-                                !self.permits(*ip, literal),
-                                !self.whitelist.contains(ip),
-                                *ip,
-                            )
-                        })
-                        .ok_or(RequestError::IpDenied)?
+                    self.select_dns_ip(addresses.map(|address| address.ip()), host_allowed)?
                 }
             };
             resolved = Some(ip);
@@ -105,10 +120,7 @@ impl OriginPolicy {
                 .await
                 .map_err(|_| RequestError::CacheUnavailable)?;
             if stored.is_some() {
-                return self
-                    .permits(ip, literal)
-                    .then_some(ip)
-                    .ok_or(RequestError::IpDenied);
+                return Ok(ip);
             }
             // Another request populated this key. Check its value before using any address.
         }
@@ -159,10 +171,53 @@ mod tests {
             whitelist: HashSet::from([listed, private]),
             ttl_seconds: 3600,
         };
-        assert!(policy.permits(unlisted, None));
-        assert!(!policy.permits(private, None));
-        assert!(policy.permits(listed, Some(listed)));
-        assert!(!policy.permits(listed, Some(unlisted)));
-        assert!(!policy.permits(unlisted, Some(unlisted)));
+        assert_eq!(policy.check_ip(unlisted, None, true), Ok(unlisted));
+        assert_eq!(
+            policy.check_ip(private, None, true),
+            Err(RequestError::IpDenied)
+        );
+        assert_eq!(policy.check_ip(listed, Some(listed), true), Ok(listed));
+        assert_eq!(
+            policy.check_ip(listed, Some(unlisted), true),
+            Err(RequestError::IpDenied)
+        );
+        assert_eq!(
+            policy.check_ip(unlisted, Some(unlisted), true),
+            Err(RequestError::IpDenied)
+        );
+    }
+
+    #[test]
+    fn unlisted_dns_hosts_require_a_whitelisted_public_ip() {
+        let listed = "49.13.25.133".parse().unwrap();
+        let unlisted = "8.8.8.8".parse().unwrap();
+        let private = "192.168.1.1".parse().unwrap();
+        let policy = OriginPolicy {
+            allowed_hosts: AllowedHosts::new(vec![]).unwrap(),
+            whitelist: HashSet::from([listed, private]),
+            ttl_seconds: 3600,
+        };
+
+        assert_eq!(
+            policy.select_dns_ip([unlisted, private, listed].into_iter(), false),
+            Ok(listed)
+        );
+        assert_eq!(
+            policy.select_dns_ip([unlisted, private].into_iter(), false),
+            Err(RequestError::HostDenied)
+        );
+        assert_eq!(
+            policy.select_dns_ip([unlisted].into_iter(), true),
+            Ok(unlisted)
+        );
+        assert_eq!(policy.check_ip(listed, None, false), Ok(listed));
+        assert_eq!(
+            policy.check_ip(unlisted, None, false),
+            Err(RequestError::HostDenied)
+        );
+        assert_eq!(
+            policy.check_ip(private, None, false),
+            Err(RequestError::IpDenied)
+        );
     }
 }

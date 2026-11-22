@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Allow DNS hostnames outside `allowedHosts` when they resolve to a public address in `hostIPWhitelist`. Cache the approved address for `hostIPCacheTtl` and check it against the current policy on each request.
+
 ## 0.3.0
 
 - Grouped the Rust source by responsibility and made `main.rs` construct and inject the application's dependencies.
