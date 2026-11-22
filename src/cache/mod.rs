@@ -92,16 +92,7 @@ impl Cache {
         let mut pointer = redis_index::lookup(&backend.redis, &key).await?;
         let requested = url.query().map(str::to_owned);
         if let Some(id) = pointer.id() {
-            let directory = backend
-                .storage
-                .open_read(id)
-                .await
-                .map_err(|_| RequestError::StorageUnavailable)?;
-            let contents = match directory {
-                Some(directory) => backend.cached_contents(&directory, &key, id).await?,
-                None => None,
-            };
-            match contents {
+            match backend.read_cached_contents(&key, id).await? {
                 Some((metadata, Contents::Data(body)))
                     if metadata.deadlines.usable(unix_seconds()) =>
                 {

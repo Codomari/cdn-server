@@ -13,7 +13,7 @@ use std::{
 use axum::http::{HeaderValue, StatusCode, header};
 use redis::aio::MultiplexedConnection;
 use reqwest::{
-    Client,
+    Client, Response,
     dns::{Name, Resolve, Resolving},
     redirect::Policy,
 };
@@ -102,19 +102,26 @@ async fn download_inner(
 ) -> Result<Upstream, RequestError> {
     let client =
         client(url.host_str().ok_or(RequestError::InvalidUrl)?, ip).map_err(request_error)?;
-    let mut response = client
+    let response = client
         .get(url.clone())
         .header(header::ACCEPT_ENCODING, "identity")
         .send()
         .await
         .map_err(request_error)?;
 
-    let status = response.status().as_u16();
-    if redirect::is_redirect(status) {
+    if redirect::is_redirect(response.status().as_u16()) {
         let redirect =
             redirect::read_redirect(redis, policy, &url, response, config.store_redirects).await?;
         return Ok(Upstream::Redirect(redirect));
     }
+    let (media_type, bytes) = read_file(response, config.max_file_size).await?;
+    Ok(Upstream::File(media_type, bytes))
+}
+
+async fn read_file(
+    mut response: Response,
+    max_file_size: usize,
+) -> Result<(HeaderValue, Vec<u8>), RequestError> {
     check_file_status(response.status())?;
     if response
         .headers()
@@ -126,7 +133,7 @@ async fn download_inner(
     }
     if response
         .content_length()
-        .is_some_and(|size| size > config.max_file_size as u64)
+        .is_some_and(|size| size > max_file_size as u64)
     {
         return Err(RequestError::FileTooLarge);
     }
@@ -136,12 +143,12 @@ async fn download_inner(
     );
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(request_error)? {
-        if chunk.len() > config.max_file_size - bytes.len() {
+        if chunk.len() > max_file_size - bytes.len() {
             return Err(RequestError::FileTooLarge);
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok(Upstream::File(media_type, bytes))
+    Ok((media_type, bytes))
 }
 
 #[cfg(test)]

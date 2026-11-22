@@ -52,6 +52,20 @@ impl OriginPolicy {
         self.check_ip(ip, None, host_allowed)
     }
 
+    async fn resolve_dns_ip(
+        &self,
+        hostname: &str,
+        host_allowed: bool,
+    ) -> Result<IpAddr, RequestError> {
+        let absolute = format!("{hostname}.");
+        let addresses =
+            tokio::time::timeout(CONNECT_TIMEOUT, tokio::net::lookup_host((absolute, 0)))
+                .await
+                .map_err(|_| RequestError::OriginAddressNotFound)?
+                .map_err(|_| RequestError::OriginAddressNotFound)?;
+        self.select_dns_ip(addresses.map(|address| address.ip()), host_allowed)
+    }
+
     pub(crate) async fn approve(
         &self,
         redis: &MultiplexedConnection,
@@ -69,61 +83,66 @@ impl OriginPolicy {
         let hostname = host.trim_end_matches('.').to_ascii_lowercase();
         let key = format!("host:{hostname}:ip");
         let mut connection = redis.clone();
-        let mut resolved = None;
-
-        loop {
-            let cached: Option<Vec<u8>> = redis::cmd("GET")
-                .arg(&key)
-                .query_async(&mut connection)
-                .await
-                .map_err(|error| {
-                    if error.code() == Some("WRONGTYPE") {
-                        RequestError::OriginAddressNotFound
-                    } else {
-                        RequestError::CacheUnavailable
-                    }
-                })?;
-            if let Some(bytes) = cached {
-                let ip = std::str::from_utf8(&bytes)
-                    .ok()
-                    .and_then(|value| value.parse::<IpAddr>().ok())
-                    .filter(|ip| ip.to_string().as_bytes() == bytes)
-                    .ok_or(RequestError::OriginAddressNotFound)?;
-                return self.check_ip(ip, literal, host_allowed);
-            }
-
-            let ip = match (resolved, literal) {
-                (Some(ip), _) => ip,
-                (None, Some(ip)) => self.check_ip(ip, literal, host_allowed)?,
-                (None, None) => {
-                    let absolute = format!("{hostname}.");
-                    let addresses = tokio::time::timeout(
-                        CONNECT_TIMEOUT,
-                        tokio::net::lookup_host((absolute, 0)),
-                    )
-                    .await
-                    .map_err(|_| RequestError::OriginAddressNotFound)?
-                    .map_err(|_| RequestError::OriginAddressNotFound)?;
-                    self.select_dns_ip(addresses.map(|address| address.ip()), host_allowed)?
-                }
-            };
-            resolved = Some(ip);
-
-            let stored: Option<String> = redis::cmd("SET")
-                .arg(&key)
-                .arg(ip.to_string())
-                .arg("EX")
-                .arg(self.ttl_seconds)
-                .arg("NX")
-                .query_async(&mut connection)
-                .await
-                .map_err(|_| RequestError::CacheUnavailable)?;
-            if stored.is_some() {
-                return Ok(ip);
-            }
-            // Another request populated this key. Check its value before using any address.
+        if let Some(ip) = read_cached_ip(&mut connection, &key).await? {
+            return self.check_ip(ip, literal, host_allowed);
         }
+
+        let ip = match literal {
+            Some(ip) => self.check_ip(ip, literal, host_allowed)?,
+            None => self.resolve_dns_ip(&hostname, host_allowed).await?,
+        };
+        while !cache_ip_if_absent(&mut connection, &key, ip, self.ttl_seconds).await? {
+            // Another request populated the key. Recheck its address, or retry if it expired.
+            if let Some(cached_ip) = read_cached_ip(&mut connection, &key).await? {
+                return self.check_ip(cached_ip, literal, host_allowed);
+            }
+        }
+        Ok(ip)
     }
+}
+
+async fn read_cached_ip(
+    redis: &mut MultiplexedConnection,
+    key: &str,
+) -> Result<Option<IpAddr>, RequestError> {
+    let cached: Option<Vec<u8>> = redis::cmd("GET")
+        .arg(key)
+        .query_async(redis)
+        .await
+        .map_err(|error| {
+            if error.code() == Some("WRONGTYPE") {
+                RequestError::OriginAddressNotFound
+            } else {
+                RequestError::CacheUnavailable
+            }
+        })?;
+    let Some(bytes) = cached else {
+        return Ok(None);
+    };
+    let ip = std::str::from_utf8(&bytes)
+        .ok()
+        .and_then(|value| value.parse::<IpAddr>().ok())
+        .filter(|ip| ip.to_string().as_bytes() == bytes)
+        .ok_or(RequestError::OriginAddressNotFound)?;
+    Ok(Some(ip))
+}
+
+async fn cache_ip_if_absent(
+    redis: &mut MultiplexedConnection,
+    key: &str,
+    ip: IpAddr,
+    ttl_seconds: u64,
+) -> Result<bool, RequestError> {
+    let stored: Option<String> = redis::cmd("SET")
+        .arg(key)
+        .arg(ip.to_string())
+        .arg("EX")
+        .arg(ttl_seconds)
+        .arg("NX")
+        .query_async(redis)
+        .await
+        .map_err(|_| RequestError::CacheUnavailable)?;
+    Ok(stored.is_some())
 }
 
 pub(super) fn is_public(ip: IpAddr) -> bool {

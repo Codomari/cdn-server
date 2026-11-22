@@ -1,3 +1,4 @@
+mod cors;
 mod listeners;
 
 use std::{
@@ -11,6 +12,7 @@ use crate::{
     upstream::{AllowedHosts, OriginPolicy},
 };
 
+pub(crate) use cors::CorsConfig;
 use listeners::{HttpConfig, HttpsConfig};
 pub(crate) use listeners::{Listeners, TlsHost};
 
@@ -66,42 +68,6 @@ impl Default for Config {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct CorsConfig {
-    pub(crate) enable: bool,
-    pub(crate) allow: CorsAllow,
-}
-
-impl Default for CorsConfig {
-    fn default() -> Self {
-        Self {
-            enable: true,
-            allow: CorsAllow::default(),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Deserialize)]
-#[serde(default, deny_unknown_fields, rename_all = "camelCase")]
-pub(crate) struct CorsAllow {
-    pub(crate) origin: bool,
-    pub(crate) methods: bool,
-    pub(crate) headers: bool,
-    pub(crate) expose_headers: bool,
-}
-
-impl Default for CorsAllow {
-    fn default() -> Self {
-        Self {
-            origin: true,
-            methods: true,
-            headers: true,
-            expose_headers: true,
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub(crate) struct CacheConfig {
     pub(crate) freshness: u64,
@@ -120,44 +86,57 @@ pub(crate) struct Settings {
 }
 
 pub(crate) fn load() -> Result<Settings, Box<dyn Error>> {
+    read_config()?.try_into()
+}
+
+fn read_config() -> Result<Config, Box<dyn Error>> {
     let explicit = env::var_os("CONFIG_PATH");
     let path = explicit.clone().unwrap_or_else(|| "config.yaml".into());
-    let mut config: Config = match fs::read_to_string(&path) {
-        Ok(contents) => serde_yaml::from_str(&contents)?,
+    match fs::read_to_string(&path) {
+        Ok(contents) => Ok(serde_yaml::from_str(&contents)?),
         Err(error) if explicit.is_none() && error.kind() == io::ErrorKind::NotFound => {
-            Config::default()
+            Ok(Config::default())
         }
-        Err(error) => return Err(error.into()),
-    };
-    if config.storage.as_os_str().is_empty() {
-        return Err("storage must be a directory path".into());
+        Err(error) => Err(error.into()),
     }
-    let allowed_hosts = AllowedHosts::new(std::mem::take(&mut config.allowed_hosts))?;
-    let ttl = humantime::parse_duration(&config.host_ip_cache_ttl)
-        .map_err(|error| format!("invalid hostIPCacheTtl: {error}"))?;
-    if ttl.as_secs() == 0 || ttl.subsec_nanos() != 0 || ttl.as_secs() > i64::MAX as u64 / 2000 {
-        return Err(
-            "hostIPCacheTtl must be a positive whole-second duration in the supported range".into(),
-        );
+}
+
+impl TryFrom<Config> for Settings {
+    type Error = Box<dyn Error>;
+
+    fn try_from(mut config: Config) -> Result<Self, Self::Error> {
+        if config.storage.as_os_str().is_empty() {
+            return Err("storage must be a directory path".into());
+        }
+        let allowed_hosts = AllowedHosts::new(config.allowed_hosts)?;
+        let ttl = humantime::parse_duration(&config.host_ip_cache_ttl)
+            .map_err(|error| format!("invalid hostIPCacheTtl: {error}"))?;
+        if ttl.as_secs() == 0 || ttl.subsec_nanos() != 0 || ttl.as_secs() > i64::MAX as u64 / 2000 {
+            return Err(
+                "hostIPCacheTtl must be a positive whole-second duration in the supported range"
+                    .into(),
+            );
+        }
+        let origins = OriginPolicy {
+            allowed_hosts,
+            whitelist: config.host_ip_whitelist,
+            ttl_seconds: ttl.as_secs(),
+        };
+        let files = FilePolicy::new(config.allowed_extensions, config.denied_extensions)?;
+        Ok(Self {
+            listeners: Listeners::from_config(&config.http, &mut config.https)?,
+            cors: config.cors,
+            cache: CacheConfig::from_config(
+                &config.freshness,
+                &config.stale_retention,
+                config.max_filesize,
+                config.store_redirects,
+            )?,
+            origins,
+            storage: config.storage,
+            files,
+        })
     }
-    let origins = OriginPolicy {
-        allowed_hosts,
-        whitelist: std::mem::take(&mut config.host_ip_whitelist),
-        ttl_seconds: ttl.as_secs(),
-    };
-    let files = FilePolicy::new(
-        std::mem::take(&mut config.allowed_extensions),
-        std::mem::take(&mut config.denied_extensions),
-    )?;
-    let storage = std::mem::take(&mut config.storage);
-    Ok(Settings {
-        listeners: Listeners::from_config(&config.http, &mut config.https)?,
-        cors: config.cors,
-        cache: CacheConfig::try_from(config)?,
-        origins,
-        storage,
-        files,
-    })
 }
 
 impl FileSize {
@@ -188,12 +167,15 @@ impl FileSize {
     }
 }
 
-impl TryFrom<Config> for CacheConfig {
-    type Error = Box<dyn Error>;
-
-    fn try_from(config: Config) -> Result<Self, Self::Error> {
-        let freshness = humantime::parse_duration(&config.freshness)?;
-        let stale_retention = humantime::parse_duration(&config.stale_retention)?;
+impl CacheConfig {
+    fn from_config(
+        freshness: &str,
+        stale_retention: &str,
+        max_filesize: FileSize,
+        store_redirects: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        let freshness = humantime::parse_duration(freshness)?;
+        let stale_retention = humantime::parse_duration(stale_retention)?;
         if freshness < Duration::from_secs(3600) {
             return Err("freshness must be at least 1h".into());
         }
@@ -210,8 +192,8 @@ impl TryFrom<Config> for CacheConfig {
         Ok(Self {
             freshness: freshness.as_secs(),
             stale_retention: stale_retention.as_secs(),
-            max_file_size: config.max_filesize.bytes()?,
-            store_redirects: config.store_redirects,
+            max_file_size: max_filesize.bytes()?,
+            store_redirects,
         })
     }
 }
@@ -278,15 +260,14 @@ mod tests {
 
     #[test]
     fn cache_duration_validation() {
-        let defaults =
-            CacheConfig::try_from(serde_yaml::from_str::<Config>("{}").unwrap()).unwrap();
+        let defaults = Settings::try_from(Config::default()).unwrap().cache;
         assert_eq!(
             (defaults.freshness, defaults.stale_retention),
             (86_400, 604_800)
         );
         let custom = serde_yaml::from_str::<Config>("freshness: 1h\nstale_retention: 0s").unwrap();
-        assert_eq!(CacheConfig::try_from(custom).unwrap().stale_retention, 0);
+        assert_eq!(Settings::try_from(custom).unwrap().cache.stale_retention, 0);
         let short = serde_yaml::from_str::<Config>("freshness: 59m").unwrap();
-        assert!(CacheConfig::try_from(short).is_err());
+        assert!(Settings::try_from(short).is_err());
     }
 }

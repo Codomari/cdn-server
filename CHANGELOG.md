@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0
+
+- Separate CORS configuration and middleware from HTTP route setup.
+- Separate configuration loading from validation, and keep cache storage access in the cache backend.
+- Simplify origin IP resolution and caching, and separate upstream response routing from file body validation.
+
 ## 0.4.1
 
 - Replace HTTP `444` with `403 Forbidden` for origin or redirect policy denials and `404 Not Found` when an upstream address or redirect destination cannot be determined.

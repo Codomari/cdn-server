@@ -71,13 +71,20 @@ impl Backend {
         Ok(Some(metadata))
     }
 
-    pub(super) async fn cached_contents(
+    pub(super) async fn read_cached_contents(
         &self,
-        directory: &LockedDirectory,
         key: &str,
         id: &str,
     ) -> Result<Option<(Metadata, Contents)>, RequestError> {
-        let Some(metadata) = self.active_metadata(directory, key, id).await? else {
+        let Some(directory) = self
+            .storage
+            .open_read(id)
+            .await
+            .map_err(|_| RequestError::StorageUnavailable)?
+        else {
+            return Ok(None);
+        };
+        let Some(metadata) = self.active_metadata(&directory, key, id).await? else {
             return Ok(None);
         };
         if !metadata.deadlines.usable(unix_seconds()) {
