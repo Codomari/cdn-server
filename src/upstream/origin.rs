@@ -47,9 +47,8 @@ impl OriginPolicy {
         host_allowed: bool,
     ) -> Result<IpAddr, RequestError> {
         let ip = addresses
-            .filter(|ip| is_public(*ip))
-            .min_by_key(|ip| (!self.whitelist.contains(ip), *ip))
-            .ok_or(RequestError::IpDenied)?;
+            .min_by_key(|ip| (!is_public(*ip), !self.whitelist.contains(ip), *ip))
+            .ok_or(RequestError::OriginAddressNotFound)?;
         self.check_ip(ip, None, host_allowed)
     }
 
@@ -79,7 +78,7 @@ impl OriginPolicy {
                 .await
                 .map_err(|error| {
                     if error.code() == Some("WRONGTYPE") {
-                        RequestError::IpDenied
+                        RequestError::OriginAddressNotFound
                     } else {
                         RequestError::CacheUnavailable
                     }
@@ -89,7 +88,7 @@ impl OriginPolicy {
                     .ok()
                     .and_then(|value| value.parse::<IpAddr>().ok())
                     .filter(|ip| ip.to_string().as_bytes() == bytes)
-                    .ok_or(RequestError::IpDenied)?;
+                    .ok_or(RequestError::OriginAddressNotFound)?;
                 return self.check_ip(ip, literal, host_allowed);
             }
 
@@ -103,8 +102,8 @@ impl OriginPolicy {
                         tokio::net::lookup_host((absolute, 0)),
                     )
                     .await
-                    .map_err(|_| RequestError::IpDenied)?
-                    .map_err(|_| RequestError::IpDenied)?;
+                    .map_err(|_| RequestError::OriginAddressNotFound)?
+                    .map_err(|_| RequestError::OriginAddressNotFound)?;
                     self.select_dns_ip(addresses.map(|address| address.ip()), host_allowed)?
                 }
             };
@@ -205,6 +204,14 @@ mod tests {
         assert_eq!(
             policy.select_dns_ip([unlisted, private].into_iter(), false),
             Err(RequestError::HostDenied)
+        );
+        assert_eq!(
+            policy.select_dns_ip([private].into_iter(), false),
+            Err(RequestError::IpDenied)
+        );
+        assert_eq!(
+            policy.select_dns_ip(std::iter::empty(), false),
+            Err(RequestError::OriginAddressNotFound)
         );
         assert_eq!(
             policy.select_dns_ip([unlisted].into_iter(), true),

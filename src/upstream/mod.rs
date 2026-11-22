@@ -64,6 +64,15 @@ fn request_error(error: reqwest::Error) -> RequestError {
     }
 }
 
+fn check_file_status(status: StatusCode) -> Result<(), RequestError> {
+    match status {
+        StatusCode::OK => Ok(()),
+        StatusCode::FORBIDDEN => Err(RequestError::UpstreamDenied),
+        StatusCode::NOT_FOUND => Err(RequestError::UpstreamNotFound),
+        _ => Err(RequestError::UpstreamFailure),
+    }
+}
+
 pub(crate) fn content_type(value: &[u8]) -> HeaderValue {
     HeaderValue::from_bytes(value)
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream"))
@@ -106,12 +115,7 @@ async fn download_inner(
             redirect::read_redirect(redis, policy, &url, response, config.store_redirects).await?;
         return Ok(Upstream::Redirect(redirect));
     }
-    if response.status() == StatusCode::NOT_FOUND {
-        return Err(RequestError::UpstreamNotFound);
-    }
-    if response.status() != StatusCode::OK {
-        return Err(RequestError::UpstreamFailure);
-    }
+    check_file_status(response.status())?;
     if response
         .headers()
         .get_all(header::CONTENT_ENCODING)
@@ -138,4 +142,26 @@ async fn download_inner(
         bytes.extend_from_slice(&chunk);
     }
     Ok(Upstream::File(media_type, bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upstream_file_status_preserves_forbidden_and_not_found() {
+        assert_eq!(check_file_status(StatusCode::OK), Ok(()));
+        assert_eq!(
+            check_file_status(StatusCode::FORBIDDEN),
+            Err(RequestError::UpstreamDenied)
+        );
+        assert_eq!(
+            check_file_status(StatusCode::NOT_FOUND),
+            Err(RequestError::UpstreamNotFound)
+        );
+        assert_eq!(
+            check_file_status(StatusCode::INTERNAL_SERVER_ERROR),
+            Err(RequestError::UpstreamFailure)
+        );
+    }
 }

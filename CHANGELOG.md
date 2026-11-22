@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.1
+
+- Replace HTTP `444` with `403 Forbidden` for origin or redirect policy denials and `404 Not Found` when an upstream address or redirect destination cannot be determined.
+- Return `403 Forbidden` when the upstream server denies access with `403`.
+
 ## 0.4.0
 
 - Enable permissive CORS by default for browser requests without credentials. The CDN routes answer OPTIONS preflights, allow any origin and request headers, and expose response headers such as `ETag` and `Content-Disposition`.

@@ -46,10 +46,10 @@ pub(super) async fn serve(
             cached.version_mismatch,
         )),
         Upstream::Redirect(redirect) => {
-            let status =
-                StatusCode::from_u16(redirect.status).map_err(|_| RequestError::RedirectDenied)?;
+            let status = StatusCode::from_u16(redirect.status)
+                .map_err(|_| RequestError::RedirectTargetNotFound)?;
             let location = HeaderValue::from_str(&redirect.location)
-                .map_err(|_| RequestError::RedirectDenied)?;
+                .map_err(|_| RequestError::RedirectTargetNotFound)?;
             let mut response = (status, [(header::LOCATION, location)]).into_response();
             response
                 .headers_mut()
@@ -66,7 +66,8 @@ pub(super) async fn download(
     let url = origin_url(&uri, "/download/")?;
     let mut cached = cached_entry(&app, url).await?;
     if let Upstream::Redirect(redirect) = &cached.entry {
-        let url = upstream::parse(&redirect.location).map_err(|_| RequestError::RedirectDenied)?;
+        let url = upstream::parse(&redirect.location)
+            .map_err(|_| RequestError::RedirectTargetNotFound)?;
         cached = cached_entry(&app, url).await?;
     }
     match cached.entry {

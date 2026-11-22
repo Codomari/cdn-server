@@ -36,7 +36,7 @@ fn redirect_target(
             .chars()
             .any(|ch| ch.is_control() || ch.is_whitespace() || ch == '\\')
     {
-        return Err(RequestError::RedirectDenied);
+        return Err(RequestError::RedirectTargetNotFound);
     }
     let bytes = location.as_bytes();
     if bytes.iter().enumerate().any(|(index, byte)| {
@@ -45,13 +45,13 @@ fn redirect_target(
                 .get(index + 1..index + 3)
                 .is_some_and(|pair| pair.iter().all(u8::is_ascii_hexdigit))
     }) {
-        return Err(RequestError::RedirectDenied);
+        return Err(RequestError::RedirectTargetNotFound);
     }
     let target = match format {
         LocationFormat::Cached => Url::parse(location),
         LocationFormat::Received => origin.join(location),
     }
-    .map_err(|_| RequestError::RedirectDenied)?;
+    .map_err(|_| RequestError::RedirectTargetNotFound)?;
     if origin.scheme() == "https" && target.scheme() != "https" {
         return Err(RequestError::RedirectDenied);
     }
@@ -73,6 +73,7 @@ async fn approve_redirect(
         .map(|_| ())
         .map_err(|error| match error {
             RequestError::HostDenied | RequestError::IpDenied => RequestError::RedirectDenied,
+            RequestError::OriginAddressNotFound => RequestError::RedirectTargetNotFound,
             other => other,
         })
 }
@@ -84,12 +85,15 @@ pub(crate) async fn validate_cached_redirect(
     redirect: &StoredRedirect,
     enabled: bool,
 ) -> Result<(), RequestError> {
-    if !enabled || !is_redirect(redirect.status) {
+    if !enabled {
         return Err(RequestError::RedirectDenied);
+    }
+    if !is_redirect(redirect.status) {
+        return Err(RequestError::RedirectTargetNotFound);
     }
     let target = redirect_target(origin, &redirect.location, LocationFormat::Cached)?;
     if target.as_str() != redirect.location {
-        return Err(RequestError::RedirectDenied);
+        return Err(RequestError::RedirectTargetNotFound);
     }
     approve_redirect(redis, policy, &target).await
 }
@@ -108,9 +112,9 @@ pub(super) async fn read_redirect(
     let location = headers
         .next()
         .and_then(|value| value.to_str().ok())
-        .ok_or(RequestError::RedirectDenied)?;
+        .ok_or(RequestError::RedirectTargetNotFound)?;
     if headers.next().is_some() {
-        return Err(RequestError::RedirectDenied);
+        return Err(RequestError::RedirectTargetNotFound);
     }
     let target = redirect_target(origin, location, LocationFormat::Received)?;
     approve_redirect(redis, policy, &target).await?;
@@ -136,14 +140,23 @@ mod tests {
         );
         assert_eq!(
             redirect_target(&origin, location, LocationFormat::Cached),
-            Err(RequestError::RedirectDenied)
+            Err(RequestError::RedirectTargetNotFound)
         );
+    }
 
+    #[test]
+    fn redirect_targets_distinguish_unusable_locations_from_policy_denials() {
+        let origin = Url::parse("https://example.com/css/main.css").unwrap();
+        for location in ["", "/a%7", "https://["] {
+            assert_eq!(
+                redirect_target(&origin, location, LocationFormat::Received),
+                Err(RequestError::RedirectTargetNotFound)
+            );
+        }
         for location in [
-            "",
             "/main.css?other=2",
             "http://example.com/main.css",
-            "/a%7",
+            "https://192.168.1.1/main.css",
         ] {
             assert_eq!(
                 redirect_target(&origin, location, LocationFormat::Received),
